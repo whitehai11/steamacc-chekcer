@@ -31,7 +31,11 @@ if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
         
         if ! command -v node &> /dev/null; then
             echo -e "${BLUE}Installing Node.js...${NC}"
-            curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+            if [ -n "$SUDO" ]; then
+                curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            else
+                curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            fi
             $SUDO apt-get install -y nodejs
         fi
         
