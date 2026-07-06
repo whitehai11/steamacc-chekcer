@@ -151,6 +151,19 @@ node -e '
 '
 
 echo -e "\n${BLUE}Starting Steam Account Sentinel via Docker Compose...${NC}"
+mkdir -p asf-config
+cat << 'EOF' > asf-config/IPC.config
+{
+  "Kestrel": {
+    "Endpoints": {
+      "HTTP": {
+        "Url": "http://*:1242"
+      }
+    }
+  }
+}
+EOF
+
 $SUDO $DOCKER_COMPOSE_CMD up -d --build
 
 echo -e "\n${GREEN}Setup completed successfully!${NC}"
