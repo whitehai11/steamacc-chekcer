@@ -194,6 +194,7 @@ app.get('/api/asf/status', authMiddleware, async (req, res) => {
       const response = await asfRequest('get', '/Api/ASF', null, 1500);
       isRunning = response.status === 200;
     } catch (err) {
+      console.error('ASF status check failed:', err.message);
       isRunning = false;
     }
   }
