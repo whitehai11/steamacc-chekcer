@@ -8,21 +8,54 @@ NC='\033[0m'
 
 echo -e "${BLUE}=== Steam Account Sentinel Installer ===${NC}"
 
-if ! command -v git &> /dev/null; then
-    echo -e "${RED}Error: git is not installed. Please install git first.${NC}"
-    exit 1
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+    fi
 fi
 
-if ! command -v node &> /dev/null; then
-    echo -e "${RED}Error: Node.js is not installed. Please install Node.js (v18+) first.${NC}"
-    exit 1
+if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
+    echo -e "${BLUE}Missing prerequisites. Attempting auto-installation...${NC}"
+    
+    if command -v apt-get &> /dev/null; then
+        echo -e "${BLUE}Detected Debian/Ubuntu system.${NC}"
+        $SUDO apt-get update
+        
+        if ! command -v git &> /dev/null; then
+            echo -e "${BLUE}Installing git...${NC}"
+            $SUDO apt-get install -y git
+        fi
+        
+        if ! command -v node &> /dev/null; then
+            echo -e "${BLUE}Installing Node.js...${NC}"
+            curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+            $SUDO apt-get install -y nodejs
+        fi
+    elif command -v yum &> /dev/null; then
+        echo -e "${BLUE}Detected RHEL/CentOS system.${NC}"
+        
+        if ! command -v git &> /dev/null; then
+            echo -e "${BLUE}Installing git...${NC}"
+            $SUDO yum install -y git
+        fi
+        
+        if ! command -v node &> /dev/null; then
+            echo -e "${BLUE}Installing Node.js...${NC}"
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO bash -
+            $SUDO yum install -y nodejs
+        fi
+    else
+        echo -e "${RED}Error: Unsupported package manager. Please install git and Node.js manually.${NC}"
+        exit 1
+    fi
 fi
 
 REPO_URL="https://github.com/whitehai11/steamacc-chekcer.git"
 TARGET_DIR="steamacc-checker"
 
-if [ -d ".git" ]; then
-    echo -e "${BLUE}Already inside a git repository. Pulling latest changes...${NC}"
+if [ -d ".git" ] && git remote -v | grep -q "steamacc-chekcer"; then
+    echo -e "${BLUE}Already inside the repository. Pulling latest updates...${NC}"
     git pull
 else
     if [ -d "$TARGET_DIR/.git" ]; then
@@ -53,19 +86,19 @@ EXISTING_DISCORD_WEBHOOK=$(node -e 'const fs=require("fs"); console.log(JSON.par
 echo -e "\n${BLUE}--- Configuration Setup ---${NC}"
 echo "Press [Enter] to keep the existing value in brackets."
 
-read -p "Dashboard Password [$EXISTING_PASS]: " DB_PASS
+read -p "Dashboard Password [$EXISTING_PASS]: " DB_PASS < /dev/tty
 DB_PASS=${DB_PASS:-$EXISTING_PASS}
 
-read -p "CSRep Key ID [${EXISTING_CSREP_KEY:-None}]: " CSREP_KEY
+read -p "CSRep Key ID [${EXISTING_CSREP_KEY:-None}]: " CSREP_KEY < /dev/tty
 CSREP_KEY=${CSREP_KEY:-$EXISTING_CSREP_KEY}
 
-read -p "CSRep Secret [${EXISTING_CSREP_SECRET:-None}]: " CSREP_SECRET
+read -p "CSRep Secret [${EXISTING_CSREP_SECRET:-None}]: " CSREP_SECRET < /dev/tty
 CSREP_SECRET=${CSREP_SECRET:-$EXISTING_CSREP_SECRET}
 
-read -p "Steam API Key (Optional) [${EXISTING_STEAM_KEY:-None}]: " STEAM_KEY
+read -p "Steam API Key (Optional) [${EXISTING_STEAM_KEY:-None}]: " STEAM_KEY < /dev/tty
 STEAM_KEY=${STEAM_KEY:-$EXISTING_STEAM_KEY}
 
-read -p "Discord Webhook URL (Optional) [${EXISTING_DISCORD_WEBHOOK:-None}]: " DISCORD_WEBHOOK
+read -p "Discord Webhook URL (Optional) [${EXISTING_DISCORD_WEBHOOK:-None}]: " DISCORD_WEBHOOK < /dev/tty
 DISCORD_WEBHOOK=${DISCORD_WEBHOOK:-$EXISTING_DISCORD_WEBHOOK}
 
 export DB_PASS CSREP_KEY CSREP_SECRET STEAM_KEY DISCORD_WEBHOOK
