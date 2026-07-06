@@ -21,7 +21,7 @@ if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
     
     if command -v apt-get &> /dev/null; then
         echo -e "${BLUE}Detected Debian/Ubuntu system.${NC}"
-        $SUDO apt-get update
+        $SUDO apt-get update --allow-releaseinfo-change
         
         if ! command -v git &> /dev/null; then
             echo -e "${BLUE}Installing git...${NC}"
