@@ -110,7 +110,7 @@ fi
 
 CONFIG_FILE="config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo '{"dashboardPassword":"admin","asfPath":"./asf","steamApiKey":"","csrepKeyId":"","csrepSecret":"","asfIpcUrl":"http://127.0.0.1:1242","externalAsf":true,"discordWebhookUrl":"","port":3000}' > "$CONFIG_FILE"
+    echo '{"dashboardPassword":"admin","asfPath":"./asf","steamApiKey":"","csrepKeyId":"","csrepSecret":"","asfIpcUrl":"http://asf:1242","asfIpcPassword":"","externalAsf":true,"discordWebhookUrl":"","port":3000}' > "$CONFIG_FILE"
 fi
 
 EXISTING_PASS=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync("config.json")).dashboardPassword || "admin")')
@@ -118,6 +118,11 @@ EXISTING_CSREP_KEY=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.
 EXISTING_CSREP_SECRET=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync("config.json")).csrepSecret || "")')
 EXISTING_STEAM_KEY=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync("config.json")).steamApiKey || "")')
 EXISTING_DISCORD_WEBHOOK=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync("config.json")).discordWebhookUrl || "")')
+EXISTING_IPC_PASS=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync("config.json")).asfIpcPassword || "")')
+
+if [ -z "$EXISTING_IPC_PASS" ]; then
+    EXISTING_IPC_PASS=$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')
+fi
 
 echo -e "\n${BLUE}--- Configuration Setup ---${NC}"
 echo "Press [Enter] to keep the existing value in brackets."
@@ -137,7 +142,7 @@ STEAM_KEY=${STEAM_KEY:-$EXISTING_STEAM_KEY}
 read -p "Discord Webhook URL (Optional) [${EXISTING_DISCORD_WEBHOOK:-None}]: " DISCORD_WEBHOOK < /dev/tty
 DISCORD_WEBHOOK=${DISCORD_WEBHOOK:-$EXISTING_DISCORD_WEBHOOK}
 
-export DB_PASS CSREP_KEY CSREP_SECRET STEAM_KEY DISCORD_WEBHOOK
+export DB_PASS CSREP_KEY CSREP_SECRET STEAM_KEY DISCORD_WEBHOOK EXISTING_IPC_PASS
 node -e '
   const fs = require("fs");
   const file = "config.json";
@@ -147,12 +152,14 @@ node -e '
   data.csrepSecret = process.env.CSREP_SECRET;
   data.steamApiKey = process.env.STEAM_KEY;
   data.discordWebhookUrl = process.env.DISCORD_WEBHOOK;
+  data.asfIpcUrl = "http://asf:1242";
+  data.asfIpcPassword = process.env.EXISTING_IPC_PASS;
   fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 '
 
 echo -e "\n${BLUE}Starting Steam Account Sentinel via Docker Compose...${NC}"
 mkdir -p asf-config
-cat << 'EOF' > asf-config/IPC.config
+cat << EOF > asf-config/IPC.config
 {
   "Kestrel": {
     "Endpoints": {
@@ -160,7 +167,8 @@ cat << 'EOF' > asf-config/IPC.config
         "Url": "http://*:1242"
       }
     }
-  }
+  },
+  "IPCPassword": "$EXISTING_IPC_PASS"
 }
 EOF
 

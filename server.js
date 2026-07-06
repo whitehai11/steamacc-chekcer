@@ -16,7 +16,8 @@ let config = {
   steamApiKey: '',
   csrepKeyId: '',
   csrepSecret: '',
-  asfIpcUrl: 'http://127.0.0.1:1242',
+  asfIpcUrl: 'http://asf:1242',
+  asfIpcPassword: '',
   externalAsf: true,
   discordWebhookUrl: '',
   port: 3000
@@ -28,6 +29,18 @@ if (fs.existsSync(CONFIG_PATH)) {
   } catch (err) {
     console.error('Error reading config.json, using defaults:', err);
   }
+}
+
+async function asfRequest(method, urlPath, data = null, timeout = 5000) {
+  const headers = {};
+  if (config.asfIpcPassword) {
+    headers['Authentication'] = config.asfIpcPassword;
+  }
+  const url = `${config.asfIpcUrl}${urlPath}`;
+  if (method.toLowerCase() === 'post') {
+    return axios.post(url, data, { headers, timeout });
+  }
+  return axios.get(url, { headers, timeout });
 }
 
 const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
@@ -178,7 +191,7 @@ app.get('/api/asf/status', authMiddleware, async (req, res) => {
   
   if (config.externalAsf) {
     try {
-      const response = await axios.get(`${config.asfIpcUrl}/Api/ASF`, { timeout: 1500 });
+      const response = await asfRequest('get', '/Api/ASF', null, 1500);
       isRunning = response.status === 200;
     } catch (err) {
       isRunning = false;
@@ -243,15 +256,12 @@ app.post('/api/accounts/:id/2fa', authMiddleware, async (req, res) => {
   }
 
   try {
-   
-    const ipcUrl = `${config.asfIpcUrl}/Api/Bot/${account.botName}/Input`;
-
     const inputType = code.length === 5 ? 1 : 2; 
     
-    const response = await axios.post(ipcUrl, {
+    const response = await asfRequest('post', `/Api/Bot/${account.botName}/Input`, {
       Type: inputType,
       Value: code.trim()
-    }, { timeout: 10000 });
+    }, 10000);
 
     if (response.data && response.data.Success) {
       account.status = 'Online';
@@ -278,8 +288,7 @@ app.get('/api/accounts/:id/2fa-code', authMiddleware, async (req, res) => {
   }
 
   try {
-    const ipcUrl = `${config.asfIpcUrl}/Api/Bot/${account.botName}/TwoFactorCode`;
-    const response = await axios.get(ipcUrl, { timeout: 5000 });
+    const response = await asfRequest('get', `/Api/Bot/${account.botName}/TwoFactorCode`, null, 5000);
     
     if (response.data && response.data.Success && response.data.Result) {
       res.json({ code: response.data.Result });
@@ -304,8 +313,7 @@ app.get('/api/accounts/:id/web-login', authMiddleware, async (req, res) => {
   }
 
   try {
-    const ipcUrl = `${config.asfIpcUrl}/Api/Bot/${account.botName}/WebLogin`;
-    const response = await axios.get(ipcUrl, { timeout: 8000 });
+    const response = await asfRequest('get', `/Api/Bot/${account.botName}/WebLogin`, null, 8000);
     
     if (response.data && response.data.Success && response.data.Result) {
       res.json({ url: response.data.Result });
@@ -353,7 +361,7 @@ async function performAccountCheck(account) {
 
   if (config.externalAsf) {
     try {
-      const botResponse = await axios.get(`${config.asfIpcUrl}/Api/Bot/${account.botName}`, { timeout: 3000 });
+      const botResponse = await asfRequest('get', `/Api/Bot/${account.botName}`, null, 3000);
       if (botResponse.data && botResponse.data.Result && botResponse.data.Result[account.botName]) {
         const botData = botResponse.data.Result[account.botName];
 
@@ -411,8 +419,7 @@ async function performAccountCheck(account) {
 
   if (config.externalAsf && account.status === 'Online') {
     try {
-      const profileUrl = `${config.asfIpcUrl}/Api/CS2Interface/${account.botName}/PlayerProfile`;
-      const cs2Res = await axios.get(profileUrl, { timeout: 5000 });
+      const cs2Res = await asfRequest('get', `/Api/CS2Interface/${account.botName}/PlayerProfile`, null, 5000);
       
       if (cs2Res.data && cs2Res.data.Success && cs2Res.data.Result) {
         const profiles = cs2Res.data.Result.account_profiles;
