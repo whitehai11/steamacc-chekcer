@@ -21,7 +21,7 @@ if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
     
     if command -v apt-get &> /dev/null; then
         echo -e "${BLUE}Detected Debian/Ubuntu system.${NC}"
-        echo 'Acquire::AllowReleaseInfoChange::Label "true";' | $SUDO tee /etc/apt/apt.conf.d/99allow-label-change > /dev/null
+        echo 'Acquire::AllowReleaseInfoChange "true";' | $SUDO tee /etc/apt/apt.conf.d/99allow-label-change > /dev/null
         $SUDO apt-get update || true
         
         if ! command -v git &> /dev/null; then
