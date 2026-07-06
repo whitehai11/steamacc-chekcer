@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Steam Account Sentinel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="glow-container">
+    <div class="glow-sphere sphere-1"></div>
+    <div class="glow-sphere sphere-2"></div>
+  </div>
+
+  <div id="login-container" class="glass-panel">
+    <div class="login-header">
+      <div class="logo-icon"></div>
+      <h2>Sentinel Login</h2>
+      <p>Secure connection required to access Steam account status</p>
+    </div>
+    <form id="login-form">
+      <div class="form-group">
+        <label for="password-input">Dashboard Password</label>
+        <div class="password-wrapper">
+          <input type="password" id="password-input" placeholder="••••••••" required>
+          <button type="button" id="toggle-login-pwd" class="btn-icon" style="font-size: 0.85rem; font-weight: 600; width: 60px;">Show</button>
+        </div>
+      </div>
+      <button type="submit" class="btn-primary btn-block">Sign In</button>
+    </form>
+    <div id="login-error" class="error-msg"></div>
+  </div>
+
+  <div id="dashboard-container" style="display: none; width: 100%; height: 100vh;">
+    <div class="app-container">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <span class="logo-accent">STEAM</span> SENTINEL
+        </div>
+        
+        <div class="connection-status">
+          <span class="status-dot dot-offline" id="asf-status-dot"></span>
+          <span id="asf-status-text">Checking Status</span>
+        </div>
+        
+        <nav class="sidebar-nav">
+          <button id="btn-nav-dashboard" class="nav-btn active-nav">Dashboard</button>
+          <button id="btn-nav-2fa" class="nav-btn">2FA Authenticator</button>
+          <button id="btn-add-account" class="nav-btn">+ Add Account</button>
+          <button id="btn-check-all" class="nav-btn">Refresh All</button>
+          <button id="btn-settings" class="nav-btn">Settings</button>
+          <button id="btn-logout" class="nav-btn nav-btn-danger">Logout</button>
+        </nav>
+        
+        <!-- Local process controls (hidden if external) -->
+        <div class="process-controls" id="local-process-controls" style="display: none;">
+          <div class="process-controls-title">Local Control</div>
+          <button id="btn-start-asf" class="btn-success btn-sm btn-block">Start ASF</button>
+          <button id="btn-stop-asf" class="btn-danger btn-sm btn-block">Stop ASF</button>
+          <button id="btn-download-asf" class="btn-primary btn-sm btn-block">Install ASF</button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <div id="dashboard-view" style="display: flex; flex-direction: column; gap: 24px;">
+          <!-- Stats summary panel -->
+          <section class="stats-panel">
+            <div class="stat-item glow-blue">
+              <span class="stat-label">Total Bots</span>
+              <span class="stat-value" id="stat-total">0</span>
+            </div>
+            <div class="stat-item glow-green">
+              <span class="stat-label">Active / Clean</span>
+              <span class="stat-value" id="stat-clean">0</span>
+            </div>
+            <div class="stat-item glow-red">
+              <span class="stat-label">Bans / Cooldowns</span>
+              <span class="stat-value" id="stat-cooldown">0</span>
+            </div>
+            <div class="stat-item glow-amber">
+              <span class="stat-label">2FA Required</span>
+              <span class="stat-value" id="stat-pending">0</span>
+            </div>
+          </section>
+
+          <!-- Search & Filter Controls -->
+          <div class="filter-bar glass-panel" style="padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap;">
+            <input type="text" id="search-input" placeholder="Search bots by name or username..." style="max-width: 320px; flex: 1; min-width: 200px;">
+            <div class="filter-tabs" style="display: flex; gap: 6px;">
+              <button class="filter-tab btn-secondary btn-sm active" data-filter="all">All</button>
+              <button class="filter-tab btn-secondary btn-sm" data-filter="online">Online</button>
+              <button class="filter-tab btn-secondary btn-sm" data-filter="cooldown">Cooldowns</button>
+              <button class="filter-tab btn-secondary btn-sm" data-filter="banned">Banned</button>
+            </div>
+          </div>
+
+          <!-- Accounts List Section -->
+          <section class="accounts-section glass-panel">
+            <div class="table-header">
+              <h3>Monitored Accounts</h3>
+              <span id="account-count" class="text-muted">0 accounts configured</span>
+            </div>
+            
+            <div class="table-responsive">
+              <table class="accounts-table">
+                <thead>
+                  <tr>
+                    <th>Account / Bot</th>
+                    <th>Steam ID</th>
+                    <th>Steam Status</th>
+                    <th style="text-align: right;">CS2 Standing</th>
+                  </tr>
+                </thead>
+                <tbody id="accounts-table-body">
+                </tbody>
+              </table>
+            </div>
+
+            <div id="no-accounts-message" class="empty-state" style="display: none;">
+              <h4>No accounts configured yet</h4>
+              <p>Add your first Steam account to begin monitoring ban and CS2 standing.</p>
+              <button id="btn-empty-add" class="btn-primary">Add Steam Account</button>
+            </div>
+          </section>
+
+          <section id="terminal-panel" class="terminal-panel glass-panel">
+            <div class="terminal-header">
+              <div class="terminal-title">
+                <span class="terminal-icon" style="font-weight: 700; color: var(--accent);">LOGS</span>
+                <span>Console Stream</span>
+              </div>
+              <div class="terminal-controls">
+                <button id="btn-clear-logs" class="btn-text btn-sm">Clear</button>
+              </div>
+            </div>
+            <div id="terminal-output" class="terminal-content">
+            </div>
+          </section>
+        </div>
+
+        <div id="authenticator-view" style="display: none; flex-direction: column; gap: 24px;">
+          <section class="glass-panel" style="padding: 24px; min-height: 450px;">
+            <div class="table-header" style="border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 14px;">
+              <h3>2FA Authenticator Panel</h3>
+              <span class="text-muted" id="auth-count">0 accounts configured</span>
+            </div>
+            <div class="auth-grid" id="auth-grid-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-top: 20px;">
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="modal-add-account" class="modal-overlay">
+    <div class="modal-content glass-panel">
+      <div class="modal-header">
+        <h3>Add Steam Account</h3>
+        <button class="btn-close modal-close">&times;</button>
+      </div>
+      <form id="add-account-form">
+        <div class="form-group">
+          <label for="acc-botname">Bot Name (Unique Identifier)</label>
+          <input type="text" id="acc-botname" placeholder="e.g. cs_bot_1" required pattern="^[a-zA-Z0-9_-]+$">
+          <small>Only alphanumeric characters, dashes, and underscores allowed.</small>
+        </div>
+        <div class="form-group">
+          <label for="acc-username">Steam Username (Login Name)</label>
+          <input type="text" id="acc-username" placeholder="Steam Login ID" required>
+        </div>
+        <div class="form-group">
+          <label for="acc-password">Steam Password</label>
+          <input type="password" id="acc-password" placeholder="Steam Login Password" required>
+        </div>
+        <div class="form-group">
+          <label for="acc-2fa">Steam Shared Secret (Optional for Auto-2FA)</label>
+          <input type="text" id="acc-2fa" placeholder="e.g. R1234567890ABCDEF1234567890=">
+          <small>Enables ASF to auto-generate 2FA login codes without prompting you.</small>
+          <div style="margin-top: 10px;">
+            <button type="button" class="btn-text btn-sm" id="btn-toggle-sda-guide" style="padding: 0; font-size: 0.75rem; text-decoration: underline;">How to get my Shared Secret?</button>
+            <div id="sda-guide-content" style="display: none; background: rgba(255, 255, 255, 0.01); padding: 12px; border-radius: 6px; border: 1px solid var(--border); margin-top: 8px; font-size: 0.78rem; line-height: 1.4; color: var(--text-muted);">
+              <strong>Using Steam Desktop Authenticator (SDA):</strong><br>
+              1. Setup your account on the SDA desktop app.<br>
+              2. Open the SDA folder on your PC and navigate to <code>/maFiles</code>.<br>
+              3. Open the <code>.maFile</code> matching your account in a text editor.<br>
+              4. Copy the value of the <code>"shared_secret"</code> parameter (looks like a base64 string, e.g. <code>R123...</code>) and paste it above.
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary modal-close">Cancel</button>
+          <button type="submit" class="btn-primary">Add Account</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-steamguard" class="modal-overlay">
+    <div class="modal-content glass-panel">
+      <div class="modal-header">
+        <h3>Steam Guard Required</h3>
+        <button class="btn-close modal-close">&times;</button>
+      </div>
+      <form id="steamguard-form">
+        <input type="hidden" id="sg-acc-id">
+        <p>Account <strong id="sg-botname">bot</strong> requires a Steam Guard authenticator code to log in.</p>
+        <div class="form-group">
+          <label for="sg-code">Auth Code (Email or Mobile App)</label>
+          <input type="text" id="sg-code" placeholder="e.g. X5H9R" required maxlength="10" style="text-transform: uppercase;">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary modal-close">Cancel</button>
+          <button type="submit" class="btn-primary">Submit Code</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-settings" class="modal-overlay">
+    <div class="modal-content glass-panel">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button class="btn-close modal-close">&times;</button>
+      </div>
+      <form id="settings-form">
+        <div class="form-group">
+          <label for="set-pwd">Change Dashboard Password</label>
+          <input type="password" id="set-pwd" placeholder="Leave empty to keep current password">
+        </div>
+        <div class="form-group">
+          <label for="set-discordurl">Discord Webhook URL (Optional)</label>
+          <div style="display: flex; gap: 10px;">
+            <input type="text" id="set-discordurl" placeholder="https://discord.com/api/webhooks/..." style="flex: 1;">
+            <button type="button" id="btn-test-webhook" class="btn-success btn-sm">Test</button>
+          </div>
+          <small>Receives status changes, bans, and CS2 cooldown alerts with @everyone pings.</small>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary modal-close">Cancel</button>
+          <button type="submit" class="btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

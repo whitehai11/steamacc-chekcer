@@ -1,0 +1,17 @@
+{
+  "name": "steam-account-sentinel",
+  "version": "1.0.0",
+  "description": "Private dashboard to check if Steam accounts are flagged/banned in Counter-Strike using ArchiSteamFarm.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.16.0",
+    "axios": "^1.6.8",
+    "adm-zip": "^0.5.10"
+  },
+  "author": "Maro",
+  "license": "MIT"
+}
