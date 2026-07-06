@@ -21,7 +21,8 @@ if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
     
     if command -v apt-get &> /dev/null; then
         echo -e "${BLUE}Detected Debian/Ubuntu system.${NC}"
-        $SUDO apt-get update --allow-releaseinfo-change || true
+        echo 'Acquire::AllowReleaseInfoChange::Label "true";' | $SUDO tee /etc/apt/apt.conf.d/99allow-label-change > /dev/null
+        $SUDO apt-get update || true
         
         if ! command -v git &> /dev/null; then
             echo -e "${BLUE}Installing git...${NC}"
@@ -33,6 +34,8 @@ if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
             curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
             $SUDO apt-get install -y nodejs
         fi
+        
+        $SUDO rm -f /etc/apt/apt.conf.d/99allow-label-change
     elif command -v yum &> /dev/null; then
         echo -e "${BLUE}Detected RHEL/CentOS system.${NC}"
         
