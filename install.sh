@@ -77,8 +77,36 @@ else
     fi
 fi
 
-echo -e "${BLUE}Installing production dependencies...${NC}"
-npm install --omit=dev
+if ! command -v docker &> /dev/null; then
+    echo -e "${BLUE}Installing Docker...${NC}"
+    if command -v apt-get &> /dev/null; then
+        curl -fsSL https://get.docker.com | $SUDO sh
+    elif command -v yum &> /dev/null; then
+        curl -fsSL https://get.docker.com | $SUDO sh
+    else
+        echo -e "${RED}Error: Docker is not installed and cannot be auto-installed. Please install Docker first.${NC}"
+        exit 1
+    fi
+fi
+
+DOCKER_COMPOSE_CMD=""
+if docker compose version &> /dev/null; then
+    DOCKER_COMPOSE_CMD="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE_CMD="docker-compose"
+else
+    echo -e "${BLUE}Installing Docker Compose Plugin...${NC}"
+    if command -v apt-get &> /dev/null; then
+        $SUDO apt-get install -y docker-compose-plugin
+        DOCKER_COMPOSE_CMD="docker compose"
+    elif command -v yum &> /dev/null; then
+        $SUDO yum install -y docker-compose-plugin
+        DOCKER_COMPOSE_CMD="docker compose"
+    else
+        echo -e "${RED}Error: Docker Compose is not installed and cannot be auto-installed. Please install it first.${NC}"
+        exit 1
+    fi
+fi
 
 CONFIG_FILE="config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -122,5 +150,10 @@ node -e '
   fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 '
 
+echo -e "\n${BLUE}Starting Steam Account Sentinel via Docker Compose...${NC}"
+$SUDO $DOCKER_COMPOSE_CMD up -d --build
+
 echo -e "\n${GREEN}Setup completed successfully!${NC}"
-echo -e "To start the application: ${BLUE}npm start${NC}"
+echo -e "The application is now running in the background via Docker."
+echo -e "You can view the logs using: ${BLUE}$DOCKER_COMPOSE_CMD logs -f web${NC}"
+echo -e "To stop the containers: ${BLUE}$DOCKER_COMPOSE_CMD down${NC}"
