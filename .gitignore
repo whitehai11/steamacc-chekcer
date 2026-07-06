@@ -1,0 +1,8 @@
+node_modules/
+config.json
+accounts.json
+asf/
+asf-config/
+asf-plugins/
+.maFiles/
+*.log
