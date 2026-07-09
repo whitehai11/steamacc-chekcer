@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "steam-user": "5.2.0",
-    "node-cs2": "1.2.0",
+    "node-cs2": "2.3.0",
     "steam-tradeoffer-manager": "2.2.0",
     "imap-simple": "5.1.0",
     "mailparser": "3.7.1",
