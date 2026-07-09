@@ -1,0 +1,11 @@
+node_modules/
+.env
+dashboard-data/
+asf/config/*.db
+asf/config/*.db.bin
+asf/config/*.crash
+asf/config/*.bin
+asf/config/*.json
+!asf/config/ASF.json
+asf/config/asf-config/
+.permission_test

@@ -110,10 +110,10 @@ services:
       - ./dashboard-data:/app/data
     environment:
       - ASF_IPC_URL=http://asf:1242/Api/Command
-      - ASF_PASSWORD=mein_sicheres_ipc_passwort
-      - STEAM_MAIL_PASSWORD=dein_tatsächliches_imap_passwort
-      - CSREP_API_KEY=dein_tatsächlicher_csrep_api_key
-      - CSREP_KEY_ID=dein_tatsächlicher_csrep_key_id
+      - ASF_PASSWORD=${ASF_PASSWORD}
+      - STEAM_MAIL_PASSWORD=${STEAM_MAIL_PASSWORD}
+      - CSREP_API_KEY=${CSREP_API_KEY}
+      - CSREP_KEY_ID=${CSREP_KEY_ID}
 
 
 [DATEI: Dockerfile]
