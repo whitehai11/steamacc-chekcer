@@ -10,7 +10,7 @@ const CSREP_API_KEY = process.env.CSREP_API_KEY || 'mein_sicheres_csrep_api_key'
  * @returns {Promise<{premier_elo: number, cs2_hours: number, inventory_value: number, trust_rating: string}>} Player stats.
  */
 async function getPlayerStats(steamId64) {
-    const url = `https://api.csrep.gg/players/${steamId64}`;
+    const url = `https://csrep.gg/api/players/${steamId64}`;
     console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'}`);
     
     try {
@@ -18,7 +18,8 @@ async function getPlayerStats(steamId64) {
             method: 'GET',
             headers: {
                 'X-API-Key': CSREP_API_KEY || '',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         });
 
@@ -52,7 +53,7 @@ async function getPlayerStats(steamId64) {
  * @returns {Promise<{premier_elo: number, cs2_hours: number, inventory_value: number, trust_rating: string}>} Refreshed player stats.
  */
 async function refreshPlayerStats(steamId64) {
-    const url = `https://api.csrep.gg/players/${steamId64}/refresh`;
+    const url = `https://csrep.gg/api/players/${steamId64}/refresh`;
     console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'}`);
     
     try {
@@ -60,7 +61,8 @@ async function refreshPlayerStats(steamId64) {
             method: 'POST',
             headers: {
                 'X-API-Key': CSREP_API_KEY || '',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         });
 
