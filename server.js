@@ -194,9 +194,12 @@ app.post('/api/bot/fetch-stats', async (req, res) => {
         
         res.json({ success: true, stats });
     } catch (err) {
-        console.error(`[Server] Failed to fetch stats for ${steamId64}:`, err);
-        io.emit('botStatus', { username: account.username, status: 'Error fetching stats' });
-        res.status(500).json({ error: 'Failed to fetch player stats from CSREP API' });
+        console.error(`[Server] API-Crash für ${steamId64}:`, err);
+        io.emit('botStatus', { 
+            username: account.username, 
+            status: `❌ SYSTEM-FEHLER: ${err.message}` 
+        });
+        res.status(500).json({ error: err.message });
     }
 });
 

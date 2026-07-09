@@ -386,34 +386,38 @@ const CSREP_API_KEY = process.env.CSREP_API_KEY || 'mein_sicheres_csrep_api_key'
 
 /**
  * Fetch stats for a Steam ID from CSREP API.
+ * Logs the raw HTTP response before parsing.
  * 
  * @param {string} steamId64 The 64-bit Steam ID.
  * @returns {Promise<{premier_elo: number, cs2_hours: number, inventory_value: number, trust_rating: string}>} Player stats.
  */
 async function getPlayerStats(steamId64) {
     const url = `https://api.csrep.gg/players/${steamId64}`;
+    console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'}`);
+    
     try {
         const response = await fetch(url, {
             method: 'GET',
             headers: {
-                'X-API-Key': CSREP_API_KEY,
+                'X-API-Key': CSREP_API_KEY || '',
                 'Accept': 'application/json'
             }
         });
 
+        const rawText = await response.text();
+        console.log(`[CSREP RAW RESPONSE]:`, rawText);
+
         if (!response.ok) {
-            throw new Error(`CSREP API responded with status ${response.status}: ${response.statusText}`);
+            throw new Error(`Code ${response.status} -> Roher Text: ${rawText}`);
         }
 
-        const data = await response.json();
-        
-        // Handle PlayerEntity containing a nested result property
+        const data = JSON.parse(rawText);
         const stats = data.result || data || {};
 
         return {
-            premier_elo: typeof stats.premier_elo !== 'undefined' ? stats.premier_elo : 0,
-            cs2_hours: typeof stats.cs2_hours !== 'undefined' ? stats.cs2_hours : 0,
-            inventory_value: typeof stats.inventory_value !== 'undefined' ? stats.inventory_value : 0,
+            premier_elo: stats.premier_elo || 0,
+            cs2_hours: stats.cs2_hours || 0,
+            inventory_value: stats.inventory_value || 0,
             trust_rating: stats.trust_rating || 'Unknown'
         };
     } catch (err) {
@@ -424,32 +428,38 @@ async function getPlayerStats(steamId64) {
 
 /**
  * Trigger CSREP API stats refresh for a Steam ID.
+ * Logs the raw HTTP response before parsing.
  * 
  * @param {string} steamId64 The 64-bit Steam ID.
  * @returns {Promise<{premier_elo: number, cs2_hours: number, inventory_value: number, trust_rating: string}>} Refreshed player stats.
  */
 async function refreshPlayerStats(steamId64) {
     const url = `https://api.csrep.gg/players/${steamId64}/refresh`;
+    console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'}`);
+    
     try {
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                'X-API-Key': CSREP_API_KEY,
+                'X-API-Key': CSREP_API_KEY || '',
                 'Accept': 'application/json'
             }
         });
 
+        const rawText = await response.text();
+        console.log(`[CSREP RAW RESPONSE]:`, rawText);
+
         if (!response.ok) {
-            throw new Error(`CSREP API responded with status ${response.status}: ${response.statusText}`);
+            throw new Error(`Code ${response.status} -> Roher Text: ${rawText}`);
         }
 
-        const data = await response.json();
+        const data = JSON.parse(rawText);
         const stats = data.result || data || {};
 
         return {
-            premier_elo: typeof stats.premier_elo !== 'undefined' ? stats.premier_elo : 0,
-            cs2_hours: typeof stats.cs2_hours !== 'undefined' ? stats.cs2_hours : 0,
-            inventory_value: typeof stats.inventory_value !== 'undefined' ? stats.inventory_value : 0,
+            premier_elo: stats.premier_elo || 0,
+            cs2_hours: stats.cs2_hours || 0,
+            inventory_value: stats.inventory_value || 0,
             trust_rating: stats.trust_rating || 'Unknown'
         };
     } catch (err) {
@@ -665,9 +675,12 @@ app.post('/api/bot/fetch-stats', async (req, res) => {
         
         res.json({ success: true, stats });
     } catch (err) {
-        console.error(`[Server] Failed to fetch stats for ${steamId64}:`, err);
-        io.emit('botStatus', { username: account.username, status: 'Error fetching stats' });
-        res.status(500).json({ error: 'Failed to fetch player stats from CSREP API' });
+        console.error(`[Server] API-Crash für ${steamId64}:`, err);
+        io.emit('botStatus', { 
+            username: account.username, 
+            status: `❌ SYSTEM-FEHLER: ${err.message}` 
+        });
+        res.status(500).json({ error: err.message });
     }
 });
 
