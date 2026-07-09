@@ -19,7 +19,11 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const ACCOUNTS_FILE = path.join(__dirname, 'accounts.json');
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
 
 app.use(express.json());
 

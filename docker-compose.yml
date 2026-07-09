@@ -23,6 +23,7 @@ services:
       - asf
     volumes:
       - ./asf/config:/app/asf-config
+      - ./dashboard-data:/app/data
     environment:
       - ASF_IPC_URL=http://asf:1242/Api/Command
       - ASF_PASSWORD=mein_sicheres_ipc_passwort
