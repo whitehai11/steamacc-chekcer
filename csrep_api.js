@@ -39,6 +39,15 @@ async function getPlayerStats(steamId64) {
         console.log(`[CSREP RAW RESPONSE]:`, rawText);
 
         if (!response.ok) {
+            if (response.status === 500) {
+                console.log(`[CSREP] Player ${steamId64} not tracked on CSRep.gg yet (Server returned 500). Returning default stats.`);
+                return {
+                    premier_elo: 0,
+                    cs2_hours: 0,
+                    inventory_value: 0,
+                    trust_rating: 'Unknown (Not Tracked)'
+                };
+            }
             throw new Error(`Code ${response.status} -> Roher Text: ${rawText}`);
         }
 
@@ -92,6 +101,15 @@ async function refreshPlayerStats(steamId64) {
         console.log(`[CSREP RAW RESPONSE]:`, rawText);
 
         if (!response.ok) {
+            if (response.status === 500) {
+                console.log(`[CSREP] Player ${steamId64} not tracked on CSRep.gg yet (Server returned 500). Returning default stats.`);
+                return {
+                    premier_elo: 0,
+                    cs2_hours: 0,
+                    inventory_value: 0,
+                    trust_rating: 'Unknown (Not Tracked)'
+                };
+            }
             throw new Error(`Code ${response.status} -> Roher Text: ${rawText}`);
         }
 
