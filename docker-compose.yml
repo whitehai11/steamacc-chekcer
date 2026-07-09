@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  asf:
+    image: justarchinet/archisteamfarm:latest
+    restart: always
+    volumes:
+      - ./asf/config:/app/config
+      - ./asf/plugins:/app/plugins
+
+  dashboard:
+    build: .
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - asf
+    environment:
+      - ASF_IPC_URL=http://asf:1242/Api/Command
+      - ASF_PASSWORD=mein_sicheres_ipc_passwort
+      - STEAM_MAIL_PASSWORD=dein_tatsächliches_imap_passwort
+      - CSREP_API_KEY=dein_tatsächlicher_csrep_api_key
+

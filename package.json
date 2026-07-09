@@ -1,0 +1,20 @@
+{
+  "name": "steam-bot-dashboard",
+  "version": "1.0.0",
+  "description": "Backend for an automated Steam Bot Dashboard running headless in Docker",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "steam-user": "5.2.0",
+    "node-cs2": "1.2.0",
+    "steam-tradeoffer-manager": "2.2.0",
+    "imap-simple": "5.1.0",
+    "mailparser": "3.7.1",
+    "express": "4.19.2",
+    "socket.io": "4.7.5",
+    "node-fetch": "2.7.0"
+  },
+  "private": true
+}

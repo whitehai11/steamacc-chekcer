@@ -1,0 +1,1736 @@
+================================================================================
+1. SYSTEM-ARCHITEKTUR & NETZWERK-LOGIK
+================================================================================
+
+DOCKER-NETZWERK & ISOLATION:
+Im vorliegenden Setup läuft das gesamte System in einem isolierten Docker-Netzwerk (Default Bridge-Netzwerk des Compose-Projekts). 
+- Der Service 'asf' (ArchiSteamFarm) besitzt kein Port-Mapping ('ports') nach außen hin zum Host-System. Das bedeutet, dass der interne Port 1242 (der ASF IPC Webserver) von außerhalb des Docker-Netzwerks vollkommen unerreichbar ist. Dies stellt eine kritische Sicherheitsbarriere dar, da potenzielle Angreifer über das Internet keinen Zugriff auf die Kontrollschnittstelle von ArchiSteamFarm erlangen können.
+- Der Service 'dashboard' (unsere Node.js Master-Applikation) befindet sich im selben Docker-Netzwerk. Dadurch kann das Dashboard unter Verwendung der systemeigenen DNS-Namensauflösung von Docker direkt über den Servicenamen 'asf' auf ArchiSteamFarm zugreifen. Die Kommunikation findet intern statt über die URL:
+  http://asf:1242/Api/Command
+- Das Node.js-Dashboard selbst exponiert den Port 3000 nach außen hin ('ports: 3000:3000'), damit Administratoren und berechtigte Web-Clients das Cyberpunk-Interface aufrufen und steuern können.
+
+ABLAUFDIAGRAMM DES 2-STUNDEN-SANKTIONEN-INTERVALLS:
+Jede 2 Stunden wird ein globaler Timer (setInterval) im Master-Orchestrator ausgeführt. Dieses Intervall prüft die Matchmaking-Cooldowns aller registrierten Bot-Accounts im echten Counter-Strike 2 Game Coordinator, um eventuelle Sperren der Accounts zu detektieren.
+
+[INTERVAL TRIGGER (Alle 2 Stunden)]
+             │
+             ▼
+[1. ASF FARMING STOPPEN]
+Sendet HTTP-POST an http://asf:1242/Api/Command mit der Anweisung "!stop <BotName>"
+             │
+             ▼
+[2. VERZÖGERUNG (5 SEKUNDEN)]
+Wartet 5 Sekunden, damit der ArchiSteamFarm-Prozess die Verbindung sauber trennen und das Steam-Netzwerk für den Bot freigeben kann.
+             │
+             ▼
+[3. HEADLESS LOGIN VIA STEAM-USER]
+Dashboard-Prozess (cs2_checker.js) meldet sich mit den Zugangsdaten des Bots direkt im offiziellen Steam-Netzwerk an.
+             │
+             ├─────────────────────────────────────────────────┐
+             ▼                                                 ▼
+     [STEAM GUARD INAKTIV]                             [STEAM GUARD AKTIV]
+             │                                         Startet Mail-Poller (max. 3 Versuche, alle 5s).
+             │                                         Greift via IMAP-SSL auf steamdash@neueerde.jetzt zu.
+             │                                         Filtert nach Header 'X-Steam-Message-Type: CEmailSteamGuard_Computer'
+             │                                         Extrahiert 5-stelligen Code per Regex.
+             │                                         Markiert Mail als gelesen (\Seen).
+             │                                         Führt Login-Callback mit dem Code aus.
+             │                                                 │
+             └────────────────────────┬────────────────────────┘
+                                      │
+                                      ▼
+                           [GAMESPLAYED EMULATION]
+                           Emuliert Start der AppID 730 (Counter-Strike 2).
+                                      │
+                                      ▼
+                           [HELLOGC() HANDSHAKE]
+                           Verbindet sich mit dem CS2 Game Coordinator (GC).
+                                      │
+                                      ▼
+                           [COOLDOWN ABFRAGEN (accountDataSelf)]
+                           Lauscht auf GC-Event 'accountDataSelf', liest das Feld
+                           'penalty_seconds' aus und berechnet die verbleibenden Minuten.
+                                      │
+                                      ▼
+                           [LOGOFF & CLEANUP]
+                           Führt user.logOff() aus und entfernt alle Event-Listener.
+                                      │
+                                      ▼
+                           [COOLDOWN SPEICHERN]
+                           Schreibt Cooldown-Status in die lokale Datei 'accounts.json'.
+                                      │
+                                      ▼
+                           [FARMING NEUSTARTEN]
+                           Sendet HTTP-POST an ASF-IPC:
+                           - Wenn Modus 'hours': "!play <BotName> 730"
+                           - Wenn Modus 'cards': "!resume <BotName>"
+                                      │
+                                      ▼
+                           [SOCKET-PUSH AN CLIENTS]
+                           Sendet aktualisierte Kontodaten und Status-Logs live an alle Web-Clients.
+
+ERKLÄRUNG DER ICLOUD-MAIL-WEITERLEITUNG:
+Um das automatische Auslesen des Steam Guards zu ermöglichen, ohne für jeden einzelnen Steam-Account ein separates, schwer zu verwaltendes E-Mail-Postfach abfragen zu müssen, wird die Infrastruktur über eine zentrale iCloud-Mail-Weiterleitung betrieben.
+1. Alle registrierten Steam-Bots verwenden eine zentrale iCloud-E-Mail-Adresse für den Steam Guard Schutz.
+2. In den Einstellungen der iCloud-Mailbox wird eine serverseitige Filterregel eingerichtet: Jede eingehende E-Mail von 'noreply@steampowered.com', die die Steam-Guard-Computer-Autorisierung betrifft, wird unverzüglich und automatisch an das VPS-eigene Postfach 'steamdash@neueerde.jetzt' weitergeleitet.
+3. Unser Node.js-Backend greift per IMAP (SSL-verschlüsselt auf Port 993) über den Host 'mail.neueerde.jetzt' auf das Postfach zu. Es filtert gezielt nach ungelesenen (UNSEEN) E-Mails, welche den spezifischen Header 'X-Steam-Message-Type: CEmailSteamGuard_Computer' besitzen.
+4. Nach dem erfolgreichen Parsen und Extrahieren des Codes wird die E-Mail im Postfach als gelesen markiert, um eine erneute Verarbeitung bei der nächsten Abfrage zu verhindern.
+
+
+================================================================================
+2. CONTAINER- & DEPENDENCY-KONFIGURATION
+================================================================================
+
+[DATEI: docker-compose.yml]
+version: '3.8'
+
+services:
+  asf:
+    image: justarchinet/archisteamfarm:latest
+    restart: always
+    volumes:
+      - ./asf/config:/app/config
+      - ./asf/plugins:/app/plugins
+
+  dashboard:
+    build: .
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - asf
+    environment:
+      - ASF_IPC_URL=http://asf:1242/Api/Command
+      - ASF_PASSWORD=mein_sicheres_ipc_passwort
+      - STEAM_MAIL_PASSWORD=dein_tatsächliches_imap_passwort
+      - CSREP_API_KEY=dein_tatsächlicher_csrep_api_key
+
+
+[DATEI: Dockerfile]
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package.json ./
+
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
+
+
+[DATEI: package.json]
+{
+  "name": "steam-bot-dashboard",
+  "version": "1.0.0",
+  "description": "Backend for an automated Steam Bot Dashboard running headless in Docker",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "steam-user": "5.2.0",
+    "node-cs2": "1.2.0",
+    "steam-tradeoffer-manager": "2.2.0",
+    "imap-simple": "5.1.0",
+    "mailparser": "3.7.1",
+    "express": "4.19.2",
+    "socket.io": "4.7.5",
+    "node-fetch": "2.7.0"
+  },
+  "private": true
+}
+
+
+================================================================================
+3. CORE-BACKEND-MODULE (PRODUCTION-READY)
+================================================================================
+
+[DATEI: mail_bot.js]
+const imaps = require('imap-simple');
+const { simpleParser } = require('mailparser');
+
+/**
+ * Connects to the IMAP server and checks for unseen Steam Guard emails.
+ * Extracts the 5-digit code and confirmation link using RegEx.
+ * Marks the matching email as read and returns the extracted data.
+ * 
+ * @returns {Promise<{code: string, link: string|null}|null>} The code and link, or null if not found.
+ */
+async function fetchSteamGuardCode() {
+    let connection;
+    try {
+        const config = {
+            imap: {
+                user: 'steamdash@neueerde.jetzt',
+                password: process.env.STEAM_MAIL_PASSWORD || 'mein_sicheres_mail_passwort',
+                host: 'mail.neueerde.jetzt',
+                port: 993,
+                tls: true,
+                tlsOptions: { rejectUnauthorized: false },
+                authTimeout: 10000
+            }
+        };
+
+        connection = await imaps.connect(config);
+        await connection.openBox('INBOX');
+
+        // Fetch unseen messages
+        const searchCriteria = ['UNSEEN'];
+        const fetchOptions = {
+            bodies: [''],
+            markSeen: false
+        };
+
+        const messages = await connection.search(searchCriteria, fetchOptions);
+
+        for (const item of messages) {
+            const allPart = item.parts.find(part => part.which === '');
+            if (!allPart || !allPart.body) continue;
+
+            const parsed = await simpleParser(allPart.body);
+            
+            // Check if the X-Steam-Message-Type header exists and matches CEmailSteamGuard_Computer
+            const messageTypeHeader = parsed.headers.get('x-steam-message-type');
+            let isSteamGuard = false;
+
+            if (Array.isArray(messageTypeHeader)) {
+                isSteamGuard = messageTypeHeader.includes('CEmailSteamGuard_Computer');
+            } else if (typeof messageTypeHeader === 'string') {
+                isSteamGuard = messageTypeHeader === 'CEmailSteamGuard_Computer';
+            }
+
+            if (isSteamGuard) {
+                // Steam Guard messages can have both text and html parts
+                const textToScan = parsed.html || parsed.text || '';
+                
+                const codeMatch = textToScan.match(/\b([A-Z0-9]{5})\b/);
+                const linkMatch = textToScan.match(/href="(https:\/\/store\.steampowered\.com\/login\/shipping_action\/[^"]+)"/);
+
+                if (codeMatch) {
+                    const code = codeMatch[1];
+                    const link = linkMatch ? linkMatch[1] : null;
+
+                    // Mark the email as seen (read)
+                    await connection.addFlags(item.attributes.uid, '\\Seen');
+                    
+                    connection.end();
+                    return { code, link };
+                }
+            }
+        }
+
+        connection.end();
+        return null;
+    } catch (err) {
+        console.error('[Mail Bot] Error checking emails:', err);
+        if (connection) {
+            try {
+                connection.end();
+            } catch (e) {
+                // Ignore closing error
+            }
+        }
+        return null;
+    }
+}
+
+module.exports = {
+    fetchSteamGuardCode
+};
+
+
+[DATEI: cs2_checker.js]
+const SteamUser = require('steam-user');
+const NodeCS2 = require('node-cs2');
+const { fetchSteamGuardCode } = require('./mail_bot');
+
+/**
+ * Log into a Steam account, launch Counter-Strike 2, connect to the Game Coordinator,
+ * retrieve the current match penalty/cooldown, clean up, and resolve the remaining minutes.
+ * 
+ * @param {string} username The Steam username.
+ * @param {string} password The Steam password.
+ * @returns {Promise<number>} Resolves with the remaining cooldown minutes (0 if no cooldown).
+ */
+async function checkCs2Cooldown(username, password) {
+    return new Promise((resolve, reject) => {
+        const user = new SteamUser();
+        const cs2 = new NodeCS2(user);
+        
+        let timeoutId;
+        let isResolved = false;
+
+        const cleanUp = () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+            try {
+                user.logOff();
+            } catch (e) {
+                // Ignore logoff error
+            }
+            user.removeAllListeners();
+            cs2.removeAllListeners();
+        };
+
+        const safeResolve = (value) => {
+            if (!isResolved) {
+                isResolved = true;
+                cleanUp();
+                resolve(value);
+            }
+        };
+
+        const safeReject = (err) => {
+            if (!isResolved) {
+                isResolved = true;
+                cleanUp();
+                reject(err);
+            }
+        };
+
+        // Global safety timeout of 90 seconds
+        timeoutId = setTimeout(() => {
+            safeReject(new Error('Timeout during CS2 cooldown check'));
+        }, 90000);
+
+        // Handle Steam Guard Event
+        user.on('steamGuard', async (domain, callback) => {
+            console.log(`[CS2 Checker] Steam Guard code requested for bot '${username}'. Checking emails...`);
+            let attempts = 0;
+            const maxAttempts = 3;
+
+            const checkEmailLoop = async () => {
+                attempts++;
+                console.log(`[CS2 Checker] Email check attempt ${attempts}/${maxAttempts}...`);
+                const result = await fetchSteamGuardCode();
+                
+                if (result && result.code) {
+                    console.log(`[CS2 Checker] Successfully retrieved Steam Guard code: ${result.code}`);
+                    callback(result.code);
+                } else if (attempts < maxAttempts) {
+                    setTimeout(checkEmailLoop, 5000);
+                } else {
+                    console.error('[CS2 Checker] Steam Guard code not found in emails after 3 attempts.');
+                    safeReject(new Error('Steam Guard code email not found'));
+                }
+            };
+
+            // Start the polling loop after 5 seconds
+            setTimeout(checkEmailLoop, 5000);
+        });
+
+        // Handle Successful Steam Login
+        user.on('loggedOn', () => {
+            console.log(`[CS2 Checker] Bot '${username}' logged on. Launching CS2 (730)...`);
+            user.gamesPlayed([730]);
+        });
+
+        // Handle App Launch
+        user.on('appLaunched', (appid) => {
+            if (appid === 730) {
+                console.log(`[CS2 Checker] CS2 app launched. Triggering helloGC()...`);
+                if (typeof cs2.helloGC === 'function') {
+                    cs2.helloGC();
+                } else if (typeof cs2.hello === 'function') {
+                    cs2.hello();
+                }
+            }
+        });
+
+        // Listen for GC account data event (main: accountDataSelf, fallback: accountData)
+        const handleAccountData = (data) => {
+            console.log(`[CS2 Checker] Account data received for bot '${username}':`, data);
+            const penaltySeconds = data.penalty_seconds || 0;
+            const remainingMinutes = Math.ceil(penaltySeconds / 60);
+            
+            console.log(`[CS2 Checker] CS2 Cooldown for bot '${username}': ${remainingMinutes} minutes.`);
+            safeResolve(remainingMinutes);
+        };
+
+        cs2.on('accountDataSelf', handleAccountData);
+        cs2.on('accountData', handleAccountData);
+
+        // Error Handlers
+        user.on('error', (err) => {
+            console.error(`[CS2 Checker] Steam User Error for bot '${username}':`, err);
+            safeReject(err);
+        });
+
+        cs2.on('error', (err) => {
+            console.error(`[CS2 Checker] CS2 GC Error for bot '${username}':`, err);
+            safeReject(err);
+        });
+
+        // Start Connection
+        user.logOn({
+            accountName: username,
+            password: password
+        });
+    });
+}
+
+module.exports = {
+    checkCs2Cooldown
+};
+
+
+[DATEI: csrep_api.js]
+const fetch = require('node-fetch');
+
+const CSREP_API_KEY = process.env.CSREP_API_KEY || 'mein_sicheres_csrep_api_key';
+
+/**
+ * Fetch stats for a Steam ID from CSREP API.
+ * 
+ * @param {string} steamId64 The 64-bit Steam ID.
+ * @returns {Promise<{premier_elo: number, cs2_hours: number, inventory_value: number, trust_rating: string}>} Player stats.
+ */
+async function getPlayerStats(steamId64) {
+    const url = `https://api.csrep.gg/players/${steamId64}`;
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'X-API-Key': CSREP_API_KEY,
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`CSREP API responded with status ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        
+        // Handle PlayerEntity containing a nested result property
+        const stats = data.result || data || {};
+
+        return {
+            premier_elo: typeof stats.premier_elo !== 'undefined' ? stats.premier_elo : 0,
+            cs2_hours: typeof stats.cs2_hours !== 'undefined' ? stats.cs2_hours : 0,
+            inventory_value: typeof stats.inventory_value !== 'undefined' ? stats.inventory_value : 0,
+            trust_rating: stats.trust_rating || 'Unknown'
+        };
+    } catch (err) {
+        console.error(`[CSREP API] Error fetching stats for ${steamId64}:`, err);
+        throw err;
+    }
+}
+
+/**
+ * Trigger CSREP API stats refresh for a Steam ID.
+ * 
+ * @param {string} steamId64 The 64-bit Steam ID.
+ * @returns {Promise<{premier_elo: number, cs2_hours: number, inventory_value: number, trust_rating: string}>} Refreshed player stats.
+ */
+async function refreshPlayerStats(steamId64) {
+    const url = `https://api.csrep.gg/players/${steamId64}/refresh`;
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'X-API-Key': CSREP_API_KEY,
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`CSREP API responded with status ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const stats = data.result || data || {};
+
+        return {
+            premier_elo: typeof stats.premier_elo !== 'undefined' ? stats.premier_elo : 0,
+            cs2_hours: typeof stats.cs2_hours !== 'undefined' ? stats.cs2_hours : 0,
+            inventory_value: typeof stats.inventory_value !== 'undefined' ? stats.inventory_value : 0,
+            trust_rating: stats.trust_rating || 'Unknown'
+        };
+    } catch (err) {
+        console.error(`[CSREP API] Error refreshing stats for ${steamId64}:`, err);
+        throw err;
+    }
+}
+
+module.exports = {
+    getPlayerStats,
+    refreshPlayerStats
+};
+
+
+================================================================================
+4. MASTER ORCHESTRATOR SERVER
+================================================================================
+
+[DATEI: server.js]
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const fs = require('fs');
+const path = require('path');
+const fetch = require('node-fetch');
+
+// Import modules
+const { checkCs2Cooldown } = require('./cs2_checker');
+const { getPlayerStats, refreshPlayerStats } = require('./csrep_api');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+const ACCOUNTS_FILE = path.join(__dirname, 'accounts.json');
+
+app.use(express.json());
+
+// Load static frontend files from public folder if it exists
+if (fs.existsSync(path.join(__dirname, 'public'))) {
+    app.use(express.static(path.join(__dirname, 'public')));
+}
+
+// In-Memory Database Helpers
+function readAccounts() {
+    try {
+        if (!fs.existsSync(ACCOUNTS_FILE)) {
+            fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify([], null, 2));
+            return [];
+        }
+        const data = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
+        return JSON.parse(data || '[]');
+    } catch (err) {
+        console.error('[Server DB] Error reading accounts.json:', err);
+        return [];
+    }
+}
+
+function saveAccounts(accounts) {
+    try {
+        fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2));
+    } catch (err) {
+        console.error('[Server DB] Error saving accounts.json:', err);
+    }
+}
+
+// ASF IPC Command Helper
+async function sendAsfCommand(command) {
+    const ipcUrl = process.env.ASF_IPC_URL || 'http://asf:1242/Api/Command';
+    const password = process.env.ASF_PASSWORD || 'mein_sicheres_ipc_passwort';
+    
+    console.log(`[ASF IPC] Sending command: "${command}" to ${ipcUrl}`);
+    try {
+        const response = await fetch(ipcUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authentication': password
+            },
+            body: JSON.stringify({ Command: command })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`ASF IPC responded with status ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        console.log(`[ASF IPC] Response:`, data);
+        return data;
+    } catch (err) {
+        console.error(`[ASF IPC] Error sending command:`, err);
+        return { Success: false, Message: err.message };
+    }
+}
+
+// REST Endpoints
+app.get('/api/accounts', (req, res) => {
+    const accounts = readAccounts();
+    res.json(accounts);
+});
+
+app.post('/api/accounts', (req, res) => {
+    const { username, password, steamId64 } = req.body;
+    
+    if (!username || !password || !steamId64) {
+        return res.status(400).json({ error: 'Username, password, and steamId64 are required' });
+    }
+    
+    const accounts = readAccounts();
+    
+    // Check if account already exists
+    const existingIndex = accounts.findIndex(acc => acc.username === username);
+    const newAccount = {
+        username,
+        password,
+        steamId64,
+        farmingMode: 'hours', // default farming mode
+        cooldownMinutes: 0,
+        stats: {
+            premier_elo: 0,
+            cs2_hours: 0,
+            inventory_value: 0,
+            trust_rating: 'Unknown'
+        },
+        lastUpdated: new Date().toISOString()
+    };
+    
+    if (existingIndex > -1) {
+        // preserve existing stats/cooldown if updating
+        newAccount.farmingMode = accounts[existingIndex].farmingMode || 'hours';
+        newAccount.cooldownMinutes = accounts[existingIndex].cooldownMinutes || 0;
+        newAccount.stats = accounts[existingIndex].stats || newAccount.stats;
+        accounts[existingIndex] = newAccount;
+    } else {
+        accounts.push(newAccount);
+    }
+    
+    saveAccounts(accounts);
+    
+    // Broadcast the update
+    io.emit('accountsUpdate', accounts);
+    
+    res.status(201).json({ message: 'Account registered successfully', account: newAccount });
+});
+
+app.post('/api/farming/mode', async (req, res) => {
+    const { username, mode } = req.body;
+    
+    if (!username || !mode || !['cards', 'hours'].includes(mode)) {
+        return res.status(400).json({ error: 'Username and valid mode (cards or hours) are required' });
+    }
+    
+    const accounts = readAccounts();
+    const account = accounts.find(acc => acc.username === username);
+    
+    if (!account) {
+        return res.status(404).json({ error: 'Account not found' });
+    }
+    
+    account.farmingMode = mode;
+    saveAccounts(accounts);
+    
+    // Send command to ASF
+    let cmd = '';
+    if (mode === 'hours') {
+        cmd = `!play ${username} 730`;
+    } else {
+        cmd = `!resume ${username}`;
+    }
+    
+    io.emit('botStatus', { username, status: `Switching farming mode to: ${mode}` });
+    const result = await sendAsfCommand(cmd);
+    
+    io.emit('accountsUpdate', accounts);
+    
+    res.json({ message: `Farming mode updated to ${mode}`, asfResult: result });
+});
+
+app.post('/api/bot/fetch-stats', async (req, res) => {
+    const { steamId64 } = req.body;
+    
+    if (!steamId64) {
+        return res.status(400).json({ error: 'steamId64 is required' });
+    }
+    
+    const accounts = readAccounts();
+    const account = accounts.find(acc => acc.steamId64 === steamId64);
+    
+    if (!account) {
+        return res.status(404).json({ error: 'Bot account with this Steam ID not found' });
+    }
+    
+    io.emit('botStatus', { username: account.username, status: 'Fetching player stats...' });
+    
+    try {
+        // Trigger CSREP stats fetch
+        const stats = await getPlayerStats(steamId64);
+        
+        // Save stats to local database
+        account.stats = stats;
+        account.lastUpdated = new Date().toISOString();
+        saveAccounts(accounts);
+        
+        // Push update to all clients via Socket.IO
+        io.emit('statsFetched', { username: account.username, steamId64, stats });
+        io.emit('accountsUpdate', accounts);
+        
+        res.json({ success: true, stats });
+    } catch (err) {
+        console.error(`[Server] Failed to fetch stats for ${steamId64}:`, err);
+        io.emit('botStatus', { username: account.username, status: 'Error fetching stats' });
+        res.status(500).json({ error: 'Failed to fetch player stats from CSREP API' });
+    }
+});
+
+// Manual trigger endpoint for cooldown verification
+app.post('/api/bot/check-cooldown', async (req, res) => {
+    const { username } = req.body;
+    if (!username) {
+        return res.status(400).json({ error: 'Username is required' });
+    }
+    const accounts = readAccounts();
+    const account = accounts.find(acc => acc.username === username);
+    if (!account) {
+        return res.status(404).json({ error: 'Account not found' });
+    }
+    
+    runCooldownCheckForAccount(account);
+    res.json({ message: `Cooldown check triggered for bot '${username}'` });
+});
+
+// Cooldown Checker Function for a Single Bot
+async function runCooldownCheckForAccount(bot) {
+    try {
+        console.log(`[Cooldown Schedule] Starting cooldown check for ${bot.username}...`);
+        io.emit('botStatus', { username: bot.username, status: 'Stopping farming to check cooldown' });
+        
+        // 1. Send !stop to ASF
+        await sendAsfCommand(`!stop ${bot.username}`);
+        
+        // 2. Wait 5 seconds
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // 3. Run headless check
+        io.emit('botStatus', { username: bot.username, status: 'Running headless CS2 GC cooldown check' });
+        const cooldownMinutes = await checkCs2Cooldown(bot.username, bot.password);
+        
+        // 4. Save status
+        const accounts = readAccounts();
+        const acc = accounts.find(a => a.username === bot.username);
+        if (acc) {
+            acc.cooldownMinutes = cooldownMinutes;
+            acc.lastUpdated = new Date().toISOString();
+            saveAccounts(accounts);
+        }
+        
+        io.emit('botStatus', { username: bot.username, status: `Cooldown checked: ${cooldownMinutes} min remaining` });
+        
+        // 5. Resume farming
+        const mode = bot.farmingMode || 'hours';
+        let resumeCmd = '';
+        if (mode === 'hours') {
+            resumeCmd = `!play ${bot.username} 730`;
+        } else {
+            resumeCmd = `!resume ${bot.username}`;
+        }
+        
+        io.emit('botStatus', { username: bot.username, status: `Resuming farming in ${mode} mode` });
+        await sendAsfCommand(resumeCmd);
+        
+        // Final update broadcast
+        io.emit('accountsUpdate', readAccounts());
+    } catch (err) {
+        console.error(`[Cooldown Schedule] Cooldown check failed for ${bot.username}:`, err);
+        io.emit('botStatus', { username: bot.username, status: `Cooldown check failed: ${err.message}` });
+        
+        // Fallback: Try to resume farming anyway
+        const mode = bot.farmingMode || 'hours';
+        const resumeCmd = mode === 'hours' ? `!play ${bot.username} 730` : `!resume ${bot.username}`;
+        await sendAsfCommand(resumeCmd);
+    }
+}
+
+// Global Orchestrator Scheduler: run every 2 hours
+async function runGlobalScheduler() {
+    console.log('[Scheduler] Executing periodic CS2 Cooldown check for all bots...');
+    const accounts = readAccounts();
+    
+    // Process bots sequentially to prevent rate limits or port conflicts
+    for (const bot of accounts) {
+        await runCooldownCheckForAccount(bot);
+        // Wait 10 seconds between bots
+        await new Promise(resolve => setTimeout(resolve, 10000));
+    }
+    console.log('[Scheduler] Completed periodic checks.');
+}
+
+// Set interval to run exactly every 2 hours (7,200,000 milliseconds)
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+setInterval(runGlobalScheduler, TWO_HOURS_MS);
+
+// Socket.io Connection Handler
+io.on('connection', (socket) => {
+    console.log(`[Socket.io] Client connected: ${socket.id}`);
+    
+    // Immediately send the current bot list on connection
+    socket.emit('accountsUpdate', readAccounts());
+    
+    socket.on('disconnect', () => {
+        console.log(`[Socket.io] Client disconnected: ${socket.id}`);
+    });
+});
+
+// Verify write permissions in /app directory on startup (Docker-ready security check)
+try {
+    const testFile = path.join(__dirname, '.permission_test');
+    fs.writeFileSync(testFile, 'test');
+    fs.unlinkSync(testFile);
+    console.log('[Server Setup] Read and write permissions verified for /app directory.');
+} catch (err) {
+    console.error('[Server Error] CRITICAL: No write permissions in the directory. accounts.json cannot be persisted.', err);
+}
+
+// Start Server
+server.listen(PORT, () => {
+    console.log(`[Server] Master Steam Bot Dashboard Backend listening on port ${PORT}`);
+});
+
+
+================================================================================
+5. CYBERPUNK MASTER FRONTEND UI
+================================================================================
+
+[DATEI: public/index.html]
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STEAM BOT CORE // MASTER CONTROL</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0b0b0e;
+            --bg-secondary: #121216;
+            --bg-card: #1a1a22;
+            --accent-green: #00ff66;
+            --accent-orange: #ff9900;
+            --accent-red: #ff3333;
+            --accent-blue: #00b0ff;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #ffffff;
+            --text-secondary: #8f90a6;
+            --glass-bg: rgba(26, 26, 34, 0.65);
+            --glass-blur: blur(12px);
+            --shadow-glow: 0 0 15px rgba(0, 176, 255, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(0, 176, 255, 0.05) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(0, 255, 102, 0.03) 0px, transparent 50%);
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-blue);
+        }
+
+        header {
+            background: rgba(18, 18, 22, 0.8);
+            backdrop-filter: var(--glass-blur);
+            border-bottom: 1px solid var(--border-color);
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-title-container {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            background: linear-gradient(90deg, #ffffff 0%, var(--text-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-color);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-connected {
+            background-color: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green);
+            animation: pulse-green 2s infinite;
+        }
+
+        .status-disconnected {
+            background-color: var(--accent-red);
+            box-shadow: 0 0 10px var(--accent-red);
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(0, 255, 102, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(0, 255, 102, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 255, 102, 0); }
+        }
+
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(255, 51, 51, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 51, 51, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 51, 51, 0); }
+        }
+
+        main {
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 24px;
+            padding: 24px;
+            max-width: 1600px;
+            width: 100%;
+            margin: 0 auto;
+            flex-grow: 1;
+        }
+
+        @media (max-width: 1024px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .left-col {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* Glassmorphism Cards */
+        .card {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--accent-blue);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Form Controls */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-group label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+        }
+
+        .form-group input {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: var(--shadow-glow);
+            background: rgba(0, 0, 0, 0.6);
+        }
+
+        button {
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+            border-radius: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, #0077ff 100%);
+            color: #ffffff;
+            border: none;
+            padding: 14px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 4px 15px rgba(0, 176, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 176, 255, 0.5);
+            background: linear-gradient(135deg, #00c3ff 0%, #0088ff 100%);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        /* Logging Console */
+        .console {
+            background: #050507;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            height: 280px;
+            padding: 16px;
+            overflow-y: auto;
+            font-family: 'Fira Code', 'Courier New', Courier, monospace;
+            font-size: 12px;
+            color: var(--accent-green);
+            line-height: 1.6;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.8);
+        }
+
+        .console-line {
+            margin-bottom: 8px;
+            word-break: break-all;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .console-timestamp {
+            color: var(--text-secondary);
+            margin-right: 8px;
+        }
+
+        /* Bot Fleet Section */
+        .fleet-card {
+            min-height: 500px;
+        }
+
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 13px;
+        }
+
+        th {
+            background: rgba(18, 18, 22, 0.9);
+            color: var(--text-secondary);
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+
+        tr {
+            transition: background 0.3s ease;
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        /* Account Column */
+        .account-cell {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .account-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid var(--accent-blue);
+            background: #252530;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .account-avatar svg {
+            width: 24px;
+            height: 24px;
+            fill: var(--text-secondary);
+        }
+
+        .account-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .account-name {
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .account-steamid {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: 'Fira Code', monospace;
+        }
+
+        /* Select Dropdown styling */
+        .select-wrapper {
+            position: relative;
+        }
+
+        .farming-select {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 10px 32px 10px 12px;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+
+        .farming-select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .select-wrapper::after {
+            content: '▼';
+            font-size: 8px;
+            color: var(--text-secondary);
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            position: absolute;
+            pointer-events: none;
+        }
+
+        /* Status badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-ready {
+            background: rgba(0, 255, 102, 0.1);
+            color: var(--accent-green);
+            border: 1px solid rgba(0, 255, 102, 0.3);
+            box-shadow: 0 0 10px rgba(0, 255, 102, 0.1);
+        }
+
+        .badge-cooldown {
+            background: rgba(255, 51, 51, 0.1);
+            color: var(--accent-red);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            box-shadow: 0 0 10px rgba(255, 51, 51, 0.1);
+            animation: pulse-border-red 2s infinite;
+        }
+
+        @keyframes pulse-border-red {
+            0% { border-color: rgba(255, 51, 51, 0.3); }
+            50% { border-color: rgba(255, 51, 51, 0.8); }
+            100% { border-color: rgba(255, 51, 51, 0.3); }
+        }
+
+        /* CSREP Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            min-width: 200px;
+        }
+
+        .stat-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 6px 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+        }
+
+        .stat-icon {
+            font-size: 12px;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        /* Trust rating visual colors */
+        .trust-badge {
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+
+        .trust-green { background: rgba(0, 255, 102, 0.2); color: var(--accent-green); }
+        .trust-yellow { background: rgba(255, 153, 0, 0.2); color: var(--accent-orange); }
+        .trust-red { background: rgba(255, 51, 51, 0.2); color: var(--accent-red); }
+        .trust-unknown { background: rgba(255, 255, 255, 0.1); color: var(--text-secondary); }
+
+        /* Action buttons */
+        .btn-action {
+            background: rgba(0, 176, 255, 0.08);
+            border: 1px solid rgba(0, 176, 255, 0.3);
+            color: var(--accent-blue);
+            padding: 8px 12px;
+            font-size: 11px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-radius: 6px;
+        }
+
+        .btn-action:hover:not(:disabled) {
+            background: rgba(0, 176, 255, 0.2);
+            color: #ffffff;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 8px rgba(0, 176, 255, 0.3);
+        }
+
+        .btn-action:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Spinner animation */
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .empty-fleet {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-title-container">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#00b0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2 17L12 22L22 17" stroke="#00b0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2 12L12 17L22 12" stroke="#00b0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <h1>Steam Bot Core // Master Control</h1>
+        </div>
+        <div id="connection-status" class="status-badge">
+            <span id="status-dot" class="status-dot status-disconnected"></span>
+            <span id="status-text">Disconnected</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Left Column -->
+        <div class="left-col">
+            <!-- Bot Registration Card -->
+            <section class="card">
+                <h2 class="card-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    Bot registrieren
+                </h2>
+                <form id="bot-form">
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="username">Steam Account Name</label>
+                        <input type="text" id="username" placeholder="z.B. my_steam_bot" required autocomplete="username">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="password">Steam Passwort</label>
+                        <input type="password" id="password" placeholder="••••••••••••" required autocomplete="current-password">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 24px;">
+                        <label for="steamid64">SteamID64 (17-stellig)</label>
+                        <input type="text" id="steamid64" placeholder="z.B. 76561198000000000" pattern="\d{17}" title="Die SteamID64 muss genau 17 Ziffern lang sein." required>
+                    </div>
+                    <button type="submit" class="btn-primary" style="width: 100%;">
+                        <span>🤖 Bot Flotte erweitern</span>
+                    </button>
+                </form>
+            </section>
+
+            <!-- Live Logging Console -->
+            <section class="card">
+                <h2 class="card-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="4 17 10 11 4 5"></polyline>
+                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                    </svg>
+                    System Logs // Realtime Stream
+                </h2>
+                <div id="console-stream" class="console">
+                    <div class="console-line">
+                        <span class="console-timestamp">[SYSTEM]</span> Konsole initialisiert. Warte auf Verbindung...
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Right Column: Bot Fleet -->
+        <section class="card fleet-card">
+            <h2 class="card-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+                Bot-Flotten Management
+            </h2>
+            
+            <div class="table-responsive">
+                <table id="fleet-table">
+                    <thead>
+                        <tr>
+                            <th>Account</th>
+                            <th>Farming Target</th>
+                            <th>CS2 Queue Status</th>
+                            <th>CSREP.GG Live-Statistiken</th>
+                            <th>Aktionen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fleet-body">
+                        <tr>
+                            <td colspan="5" class="empty-fleet">Lade Bot-Flotte...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <!-- Socket.IO Client Script integration -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // DOM Elements
+        const connectionStatus = document.getElementById('connection-status');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const botForm = document.getElementById('bot-form');
+        const consoleStream = document.getElementById('console-stream');
+        const fleetBody = document.getElementById('fleet-body');
+
+        // Connect to Socket.IO Server
+        const socket = io();
+
+        // Helper to format date timestamps
+        function getTimestamp() {
+            const now = new Date();
+            const pad = (n) => n.toString().padStart(2, '0');
+            return `[${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}]`;
+        }
+
+        // Add log line to console
+        function logToConsole(message, type = 'log') {
+            const line = document.createElement('div');
+            line.className = 'console-line';
+            if (type === 'error') {
+                line.style.color = 'var(--accent-red)';
+            } else if (type === 'info') {
+                line.style.color = 'var(--accent-blue)';
+            }
+            
+            const timestamp = document.createElement('span');
+            timestamp.className = 'console-timestamp';
+            timestamp.textContent = getTimestamp();
+            
+            line.appendChild(timestamp);
+            line.appendChild(document.createTextNode(message));
+            
+            consoleStream.appendChild(line);
+            consoleStream.scrollTop = consoleStream.scrollHeight;
+        }
+
+        // Socket Connection Events
+        socket.on('connect', () => {
+            statusDot.className = 'status-dot status-connected';
+            statusText.textContent = 'Connected';
+            logToConsole('Erfolgreich mit dem Control-Server verbunden.', 'info');
+        });
+
+        socket.on('disconnect', () => {
+            statusDot.className = 'status-dot status-disconnected';
+            statusText.textContent = 'Disconnected';
+            logToConsole('Verbindung zum Control-Server verloren.', 'error');
+        });
+
+        // Listen for log stream
+        socket.on('botStatus', (data) => {
+            const botStr = data.username ? `[${data.username}] ` : '';
+            logToConsole(`${botStr}${data.status}`);
+        });
+
+        socket.on('log', (message) => {
+            logToConsole(message);
+        });
+
+        // Listen for data updates
+        socket.on('accountsUpdate', (accounts) => {
+            renderFleetTable(accounts);
+        });
+
+        socket.on('update-bots', (accounts) => {
+            renderFleetTable(accounts);
+        });
+
+        socket.on('statsFetched', (data) => {
+            logToConsole(`Statistiken für Bot '${data.username}' erfolgreich geladen.`);
+        });
+
+        // Render Bot Fleet Table
+        function renderFleetTable(accounts) {
+            if (!accounts || accounts.length === 0) {
+                fleetBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="empty-fleet">Keine Bots registriert. Verwende das Formular links, um Bots hinzuzufügen.</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            fleetBody.innerHTML = '';
+
+            accounts.forEach(bot => {
+                const tr = document.createElement('tr');
+                tr.style.animation = 'fadeIn 0.3s ease-out';
+
+                // --- 1. Account Cell ---
+                const accountCell = document.createElement('td');
+                accountCell.className = 'account-cell';
+                
+                const avatarDiv = document.createElement('div');
+                avatarDiv.className = 'account-avatar';
+                // Inline SVG fallback profile picture
+                avatarDiv.innerHTML = `
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="12" cy="8" r="4"/>
+                        <path d="M12 14c-6.1 0-8 4-8 4v2h16v-2s-1.9-4-8-4z"/>
+                    </svg>
+                `;
+                
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'account-info';
+                
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'account-name';
+                nameSpan.textContent = bot.username;
+                
+                const idSpan = document.createElement('span');
+                idSpan.className = 'account-steamid';
+                idSpan.textContent = bot.steamId64;
+                
+                infoDiv.appendChild(nameSpan);
+                infoDiv.appendChild(idSpan);
+                accountCell.appendChild(avatarDiv);
+                accountCell.appendChild(infoDiv);
+
+                // --- 2. Farming Target Cell ---
+                const targetCell = document.createElement('td');
+                const selectWrapper = document.createElement('div');
+                selectWrapper.className = 'select-wrapper';
+                
+                const select = document.createElement('select');
+                select.className = 'farming-select';
+                
+                const optionCards = document.createElement('option');
+                optionCards.value = 'cards';
+                optionCards.textContent = '🃏 SAMMELKARTEN (MAX LEVEL)';
+                optionCards.selected = bot.farmingMode === 'cards';
+                
+                const optionHours = document.createElement('option');
+                optionHours.value = 'hours';
+                optionHours.textContent = '🎮 CS2 STUNDEN-IDLE';
+                optionHours.selected = bot.farmingMode === 'hours';
+                
+                select.appendChild(optionCards);
+                select.appendChild(optionHours);
+                
+                select.addEventListener('change', async (e) => {
+                    const newMode = e.target.value;
+                    try {
+                        select.disabled = true;
+                        const response = await fetch('/api/farming/mode', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: bot.username, mode: newMode })
+                        });
+                        if (!response.ok) {
+                            throw new Error('Fehler beim Ändern des Farming-Modus');
+                        }
+                        logToConsole(`Farming-Modus für '${bot.username}' auf '${newMode}' gesetzt.`, 'info');
+                    } catch (err) {
+                        logToConsole(err.message, 'error');
+                        select.value = bot.farmingMode; // rollback value
+                    } finally {
+                        select.disabled = false;
+                    }
+                });
+                
+                selectWrapper.appendChild(select);
+                targetCell.appendChild(selectWrapper);
+
+                // --- 3. Queue Status Cell ---
+                const statusCell = document.createElement('td');
+                const badge = document.createElement('span');
+                
+                if (bot.cooldownMinutes && bot.cooldownMinutes > 0) {
+                    badge.className = 'badge badge-cooldown';
+                    badge.innerHTML = `⚠️ COOLDOWN: ${bot.cooldownMinutes} MINUTEN`;
+                } else {
+                    badge.className = 'badge badge-ready';
+                    badge.innerHTML = `✅ READY TO QUEUE`;
+                }
+                statusCell.appendChild(badge);
+
+                // --- 4. CSREP Stats Cell ---
+                const statsCell = document.createElement('td');
+                const stats = bot.stats || { premier_elo: 0, cs2_hours: 0, inventory_value: 0, trust_rating: 'Unknown' };
+                
+                const statsGrid = document.createElement('div');
+                statsGrid.className = 'stats-grid';
+                
+                // Elo
+                const eloItem = document.createElement('div');
+                eloItem.className = 'stat-item';
+                eloItem.innerHTML = `<span class="stat-icon">🏆</span> <span class="stat-value">${stats.premier_elo || 0}</span>`;
+                
+                // Hours
+                const hoursItem = document.createElement('div');
+                hoursItem.className = 'stat-item';
+                hoursItem.innerHTML = `<span class="stat-icon">🕒</span> <span class="stat-value">${stats.cs2_hours || 0}h</span>`;
+                
+                // Value
+                const valItem = document.createElement('div');
+                valItem.className = 'stat-item';
+                valItem.innerHTML = `<span class="stat-icon">🪙</span> <span class="stat-value">${stats.inventory_value || 0} €</span>`;
+                
+                // Trust
+                const trustItem = document.createElement('div');
+                trustItem.className = 'stat-item';
+                
+                let trustClass = 'trust-unknown';
+                const trustLower = String(stats.trust_rating).toLowerCase();
+                if (trustLower.includes('green')) trustClass = 'trust-green';
+                else if (trustLower.includes('yellow') || trustLower.includes('orange')) trustClass = 'trust-yellow';
+                else if (trustLower.includes('red')) trustClass = 'trust-red';
+                
+                trustItem.innerHTML = `
+                    <span class="stat-icon">🛡️</span> 
+                    <span class="trust-badge ${trustClass}">${stats.trust_rating || 'Unknown'}</span>
+                `;
+                
+                statsGrid.appendChild(eloItem);
+                statsGrid.appendChild(hoursItem);
+                statsGrid.appendChild(valItem);
+                statsGrid.appendChild(trustItem);
+                statsCell.appendChild(statsGrid);
+
+                // --- 5. Actions Cell ---
+                const actionsCell = document.createElement('td');
+                const actionBtn = document.createElement('button');
+                actionBtn.className = 'btn-action';
+                actionBtn.innerHTML = `<span>🔄 Stats abrufen</span>`;
+                
+                actionBtn.addEventListener('click', async () => {
+                    try {
+                        actionBtn.disabled = true;
+                        actionBtn.innerHTML = `<span class="spinner"></span> <span>Lade...</span>`;
+                        
+                        const response = await fetch('/api/bot/fetch-stats', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ steamId64: bot.steamId64 })
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error('API-Fehler beim Abrufen der Statistiken');
+                        }
+                    } catch (err) {
+                        logToConsole(err.message, 'error');
+                    } finally {
+                        actionBtn.disabled = false;
+                        actionBtn.innerHTML = `<span>🔄 Stats abrufen</span>`;
+                    }
+                });
+                
+                actionsCell.appendChild(actionBtn);
+
+                // Append cells to row
+                tr.appendChild(accountCell);
+                tr.appendChild(targetCell);
+                tr.appendChild(statusCell);
+                tr.appendChild(statsCell);
+                tr.appendChild(actionsCell);
+                
+                fleetBody.appendChild(tr);
+            });
+        }
+
+        // Bot Registration Submission
+        botForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const usernameInput = document.getElementById('username');
+            const passwordInput = document.getElementById('password');
+            const steamidInput = document.getElementById('steamid64');
+            
+            const data = {
+                username: usernameInput.value.trim(),
+                password: passwordInput.value.trim(),
+                steamId64: steamidInput.value.trim()
+            };
+
+            const submitBtn = botForm.querySelector('button[type="submit"]');
+            const originalBtnHtml = submitBtn.innerHTML;
+
+            try {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = `<span class="spinner"></span> <span>Registriere...</span>`;
+                
+                const response = await fetch('/api/accounts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.error || 'Registrierung fehlgeschlagen');
+                }
+                
+                logToConsole(`Bot '${data.username}' erfolgreich registriert!`, 'info');
+                
+                // Clear fields
+                usernameInput.value = '';
+                passwordInput.value = '';
+                steamidInput.value = '';
+                
+            } catch (err) {
+                logToConsole(`Fehler: ${err.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalBtnHtml;
+            }
+        });
+    </script>
+</body>
+</html>
