@@ -654,6 +654,20 @@ app.post('/api/accounts', (req, res) => {
     
     saveAccounts(accounts);
     
+    // Write config for ASF
+    try {
+        const asfConfigPath = path.join(__dirname, 'asf-config', `${username}.json`);
+        const botConfig = {
+            Enabled: true,
+            SteamLogin: username,
+            SteamPassword: password
+        };
+        fs.writeFileSync(asfConfigPath, JSON.stringify(botConfig, null, 2));
+        console.log(`[Server] Wrote ASF config for bot '${username}'`);
+    } catch (err) {
+        console.error(`[Server] Failed to write ASF config for '${username}':`, err);
+    }
+    
     // Broadcast the update
     io.emit('accountsUpdate', accounts);
     
@@ -840,6 +854,34 @@ try {
 } catch (err) {
     console.error('[Server Error] CRITICAL: No write permissions in the directory. accounts.json cannot be persisted.', err);
 }
+
+// Function to synchronize all accounts in database to the mapped /app/asf-config directory
+function syncAsfConfigs() {
+    try {
+        const asfConfigDir = path.join(__dirname, 'asf-config');
+        if (!fs.existsSync(asfConfigDir)) {
+            console.log(`[Server Setup] ASF config directory ${asfConfigDir} is not mounted. Skipping bot config sync.`);
+            return;
+        }
+        const accounts = readAccounts();
+        console.log(`[Server Setup] Syncing ${accounts.length} bots to ASF configuration...`);
+        for (const account of accounts) {
+            const botFile = path.join(asfConfigDir, `${account.username}.json`);
+            const botConfig = {
+                Enabled: true,
+                SteamLogin: account.username,
+                SteamPassword: account.password
+            };
+            fs.writeFileSync(botFile, JSON.stringify(botConfig, null, 2));
+        }
+        console.log('[Server Setup] ASF configurations successfully synchronized.');
+    } catch (err) {
+        console.error('[Server Error] Failed to synchronize ASF configurations:', err);
+    }
+}
+
+// Run config sync on startup
+syncAsfConfigs();
 
 // Start Server
 server.listen(PORT, () => {

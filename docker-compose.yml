@@ -21,6 +21,8 @@ services:
       - 1.1.1.1
     depends_on:
       - asf
+    volumes:
+      - ./asf/config:/app/asf-config
     environment:
       - ASF_IPC_URL=http://asf:1242/Api/Command
       - ASF_PASSWORD=mein_sicheres_ipc_passwort
