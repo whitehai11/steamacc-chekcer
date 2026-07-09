@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   asf:
-    image: justarchinet/archisteamfarm:latest
+    image: justarchi/archisteamfarm:latest
     restart: always
     volumes:
       - ./asf/config:/app/config
