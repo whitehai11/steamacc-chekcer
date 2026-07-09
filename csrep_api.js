@@ -1,6 +1,7 @@
 const fetch = require('node-fetch');
 
 const CSREP_API_KEY = process.env.CSREP_API_KEY || 'mein_sicheres_csrep_api_key';
+const CSREP_KEY_ID = process.env.CSREP_KEY_ID;
 
 /**
  * Fetch stats for a Steam ID from CSREP API.
@@ -11,16 +12,27 @@ const CSREP_API_KEY = process.env.CSREP_API_KEY || 'mein_sicheres_csrep_api_key'
  */
 async function getPlayerStats(steamId64) {
     const url = `https://csrep.gg/api/players/${steamId64}`;
-    console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'}`);
+    console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'} und Key ID: ${CSREP_KEY_ID ? 'VORHANDEN' : 'FEHLT!'}`);
     
     try {
+        const headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        };
+
+        if (CSREP_KEY_ID) {
+            headers['X-Key-ID'] = CSREP_KEY_ID;
+            headers['X-API-Key'] = CSREP_API_KEY;
+            
+            // Fallback Basic Auth for standard developer APIs
+            headers['Authorization'] = 'Basic ' + Buffer.from(`${CSREP_KEY_ID}:${CSREP_API_KEY}`).toString('base64');
+        } else {
+            headers['X-API-Key'] = CSREP_API_KEY || '';
+        }
+
         const response = await fetch(url, {
             method: 'GET',
-            headers: {
-                'X-API-Key': CSREP_API_KEY || '',
-                'Accept': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers
         });
 
         const rawText = await response.text();
@@ -54,16 +66,26 @@ async function getPlayerStats(steamId64) {
  */
 async function refreshPlayerStats(steamId64) {
     const url = `https://csrep.gg/api/players/${steamId64}/refresh`;
-    console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'}`);
+    console.log(`[CSREP] Rufe URL auf: ${url} mit Key: ${CSREP_API_KEY ? 'VORHANDEN' : 'FEHLT!'} und Key ID: ${CSREP_KEY_ID ? 'VORHANDEN' : 'FEHLT!'}`);
     
     try {
+        const headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        };
+
+        if (CSREP_KEY_ID) {
+            headers['X-Key-ID'] = CSREP_KEY_ID;
+            headers['X-API-Key'] = CSREP_API_KEY;
+            headers['Authorization'] = 'Basic ' + Buffer.from(`${CSREP_KEY_ID}:${CSREP_API_KEY}`).toString('base64');
+        } else {
+            headers['X-API-Key'] = CSREP_API_KEY || '';
+        }
+
         const response = await fetch(url, {
             method: 'POST',
-            headers: {
-                'X-API-Key': CSREP_API_KEY || '',
-                'Accept': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers
         });
 
         const rawText = await response.text();

@@ -26,4 +26,5 @@ services:
       - ASF_PASSWORD=mein_sicheres_ipc_passwort
       - STEAM_MAIL_PASSWORD=dein_tatsächliches_imap_passwort
       - CSREP_API_KEY=dein_tatsächlicher_csrep_api_key
+      - CSREP_KEY_ID=dein_tatsächlicher_csrep_key_id
 
